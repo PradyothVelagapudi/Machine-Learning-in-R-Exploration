@@ -1,0 +1,150 @@
+---
+title: "Project 1"
+author: "Pradyoth Velagapudi"
+date: "2024-10-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Intro and Problem
+In this project I will use the **mlr3** library to explore the **'Iris'** dataset with machine learning. 
+
+**QUESTION: Given the sample data, can I construct a machine learning model to accurately predict the species of a flower given its sepal length, sepal width, petal length, and petal width?**
+
+# Loading the Data
+```{r iris, include=TRUE, echo=TRUE}
+# Load the iris dataset
+data(iris)
+
+# View summary of dataset
+summary(iris)
+```
+The Iris dataset has 4 quantitative input variables: **Sepal.Length**, **Sepal.Width**, **Petal.Length**, and **Petal.Length**. These are also called predictor variables.
+
+Based on these input variables, our goal is to predict the flower species (the target variable), which is a categorical variable. The flower species are: **Setosa**, **Versicolor**, and **Virginica**. 
+
+We need to load the mlr3 package and create a **task** pertaining to the dataset. This particular problem is a **classification task**.
+```{r load, include=TRUE, echo=TRUE}
+library(mlr3)
+library(mlr3learners)
+library(mlr3tuning)
+library(mlr3viz)
+
+# Create an mlr3 classification task
+task_iris <- TaskClassif$new(id = "iris", backend = iris, target = "Species")
+
+# Verify details of the task
+task_iris
+```
+
+# Data Visualization
+Before we build our machine learning model, let's investigate the task's dataset using the **autoplot** function in mlr3. 
+
+The **duo** plot in mlr3 visualizes the distribution of multiple features. We can use this to understand the data at a glance.
+```{r visualization1, include=TRUE, echo=TRUE}
+autoplot(task_iris, type="duo")
+```
+
+It seems that petal length, petal width, and sepal length are generally largest among virginicas and smallest among setosas, with versicolors in between. Meanwhile sepal width seems to be highest among setosas and lowest among versicolors, with virginica just slightly larger on average than versicolor.
+
+The **pairs** plot shows the pairwise comparison of multiple features.
+```{r visualization2, include=TRUE, echo=TRUE}
+autoplot(task_iris, type = "pairs")
+```
+
+This plot contains a lot of information about the correlations between multiple variables in the dataset. Our machine learning model should be able to use this information to  predict the species of a flower based on the 4 variable values.
+
+# Training Predictive Model
+Now that we have defined the task, we can construct and train a **learner**. In mlr3, a learner is an object that represents an ML algorithm or model.
+
+There are many different types of models for different problems. In this case, I used a **decision tree** model, which is common for classification tasks. 
+```{r learner, include=TRUE, echo=TRUE}
+# Define a learner (e.g., Decision Tree)
+learner <- lrn("classif.rpart", keep_model=TRUE) # rpart for decision tree classification
+
+# Train the model
+learner$train(task_iris)
+
+# Verify details of the learner
+learner
+```
+
+# Testing the Model
+After training the learner, we can begin to make some simple predictions on the dataset. Let's see the accuracy of the model by testing it back on the original dataset.
+```{r predict, include=TRUE, echo=TRUE}
+# Predict on the training set itself
+prediction <- learner$predict(task_iris)
+
+# Print prediction summary
+prediction$confusion # To see the confusion matrix
+prediction$score(msr("classif.acc")) # Accuracy score
+```
+We can see that the model is fairly accurate, having classified the correct species ~96% of the time. From the confusion matrix, we can see that it was most accurate when classifying Setosa, but it occasionally confuses versicolor and virginica. 
+
+The model wrongly classified 5 virginica flowers as versicolors, and 1 versicolor as a virginica. However, it correctly identified all 50 setosas.
+
+We can use autoplot to visualize the criteria used by the decision tree model to classify the flowers.
+```{r vis, include=TRUE, echo=TRUE}
+autoplot(learner, type="ggparty")
+```
+
+# Verifying the Model
+
+We can get a better idea of model performance by using a technique called **k-fold cross-validation**. 
+
+This process divides the dataset into k equal parts, then iteratively trains the model on k-1 folds to test it on the remaining fold. The process is repeated, each time using a different fold as the test set. Finally, the accuracy across all folds is aggregated. The result gives a more reliable estimate of the model's classification abilities.
+```{r crossvalidation, include-TRUE, echo=TRUE}
+# Define resampling strategy (e.g., 5-fold cross-validation)
+resampling <- rsmp("cv", folds = 5)
+
+# Perform cross-validation
+rr <- resample(task_iris, learner, resampling);
+
+# Aggregate results (average accuracy across folds)
+rr$aggregate(msr("classif.acc"))
+
+```
+The robust accuracy estimate should be ~93-95%. 
+
+# Optimizing Model
+Let's see if we can optimize this model further using **hyperparameter tuning**.
+
+Hyperparameters are a set of values that control the model's behavior. There are many mathematical methods for finding the right hyperparameters, but I'm using the random search method. This is a quick and easy method that samples random combinations of hyperparameters from specified ranges.
+```{r hyperparameters, include=TRUE, echo=TRUE, results='hide'}
+# Define a search space and identify the parameters to tune  
+search_space <- ps(
+  cp = p_dbl(lower = 0.001, upper = 0.1), # Complexity parameter
+  minsplit = p_int(lower = 2, upper = 20), # Minimum split size
+  minbucket = p_int(lower = 1, upper = 10), # Minimum bucket size
+  maxdepth = p_int(lower = 1, upper = 30) # Maximum depth
+)
+
+# Set up auto-tuner with random search
+at <- auto_tuner(
+  tuner = tnr("random_search"),
+  learner = learner,
+  resampling = resampling, # Validate using k-fold cross-validation
+  measure = msr("classif.acc"), # Set peformance metric to accuracy
+  search_space = search_space, 
+  term_evals = 50 # Number of evaluations
+)
+
+# Run the tuning
+at$train(task_iris)
+```
+
+Now that we have completed tuning, we can see what the tuner determined were the best hyperparameter values. We can also see the updated classification score calculated via k-fold cross-validation.
+```{r hp2, include=TRUE, echo=TRUE}
+# Get the values of the best parameters
+best_params <- at$tuning_result
+best_params
+```
+
+The new classification accuracy score should hopefully be a bit higher than before, although it likely won't increase by much given the relatively small size of the dataset. Since I utilized a random search tuning method, the accuracy score will be different each time this code segment is run.
+
+# Conclusion
+Using mlr3, we were able to construct a machine learning model to estimate the species of a flower in the iris dataset based on certain input variables.
+
